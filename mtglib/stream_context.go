@@ -11,13 +11,14 @@ import (
 )
 
 type streamContext struct {
-	ctx          context.Context
-	ctxCancel    context.CancelFunc
-	clientConn   essentials.Conn
-	telegramConn essentials.Conn
-	streamID     string
-	dc           int
-	logger       Logger
+	ctx           context.Context
+	ctxCancel     context.CancelFunc
+	clientConn    essentials.Conn
+	telegramConn  essentials.Conn
+	streamID      string
+	dc            int
+	logger        Logger
+	matchedSecret *Secret
 }
 
 func (s *streamContext) Deadline() (time.Time, bool) {

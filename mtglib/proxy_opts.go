@@ -7,10 +7,11 @@ import "time"
 // This is not required per se, but this is to shorten function signature and
 // give an ability to conveniently provide default values.
 type ProxyOpts struct {
-	// Secret defines a secret which should be used by a proxy.
+	// Secrets defines the secrets which should be used by a proxy.
+	// Multiple secrets enable secret rotation and client isolation.
 	//
 	// This is a mandatory setting.
-	Secret Secret
+	Secrets []Secret
 
 	// Network defines a network instance which should be used for all network
 	// communications made by proxies.
@@ -158,8 +159,14 @@ func (p ProxyOpts) valid() error {
 		return ErrEventStreamIsNotDefined
 	case p.Logger == nil:
 		return ErrLoggerIsNotDefined
-	case !p.Secret.Valid():
+	case len(p.Secrets) == 0:
 		return ErrSecretInvalid
+	}
+
+	for _, secret := range p.Secrets {
+		if !secret.Valid() {
+			return ErrSecretInvalid
+		}
 	}
 
 	return nil

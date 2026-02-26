@@ -34,7 +34,7 @@ type Proxy struct {
 	configUpdater               *dc.PublicConfigUpdater
 	clientObfuscatror           obfuscation.Obfuscator
 
-	secret          Secret
+	secrets         []Secret
 	network         Network
 	antiReplayCache AntiReplayCache
 	blocklist       IPBlocklist
@@ -45,8 +45,9 @@ type Proxy struct {
 
 // DomainFrontingAddress returns a host:port pair for a fronting domain.
 // If DomainFrontingIP is set, it is used instead of resolving the hostname.
+// Uses the first secret's host for domain fronting.
 func (p *Proxy) DomainFrontingAddress() string {
-	host := p.secret.Host
+	host := p.secrets[0].Host
 	if p.domainFrontingIP != "" {
 		host = p.domainFrontingIP
 	}
@@ -173,23 +174,35 @@ func (p *Proxy) doFakeTLSHandshake(ctx *streamContext) bool {
 		return false
 	}
 
-	hello, err := faketls.ParseClientHello(p.secret.Key[:], rec.Payload.Bytes())
-	if err != nil {
-		p.logger.InfoError("cannot parse client hello", err)
+	// Try each secret sequentially until one matches
+	var matchedSecret *Secret
+	var hello faketls.ClientHello
+	var helloFound bool
+
+	for i := range p.secrets {
+		secret := &p.secrets[i]
+		h, err := faketls.ParseClientHello(secret.Key[:], rec.Payload.Bytes())
+		if err != nil {
+			continue // Try next secret
+		}
+
+		if err := h.Valid(secret.Host, p.tolerateTimeSkewness); err == nil {
+			matchedSecret = secret
+			hello = h
+			helloFound = true
+			break // Found matching secret
+		}
+	}
+
+	if !helloFound {
+		p.logger.Info("no matching secret found for client hello")
 		p.doDomainFronting(ctx, rewind)
 
 		return false
 	}
 
-	if err := hello.Valid(p.secret.Host, p.tolerateTimeSkewness); err != nil {
-		p.logger.
-			BindStr("hostname", hello.Host).
-			BindStr("hello-time", hello.Time.String()).
-			InfoError("invalid faketls client hello", err)
-		p.doDomainFronting(ctx, rewind)
-
-		return false
-	}
+	// Store matched secret for this connection
+	ctx.matchedSecret = matchedSecret
 
 	if p.antiReplayCache.SeenBefore(hello.SessionID) {
 		p.logger.Warning("replay attack has been detected!")
@@ -199,7 +212,7 @@ func (p *Proxy) doFakeTLSHandshake(ctx *streamContext) bool {
 		return false
 	}
 
-	if err := faketls.SendWelcomePacket(rewind, p.secret.Key[:], hello); err != nil {
+	if err := faketls.SendWelcomePacket(rewind, matchedSecret.Key[:], hello); err != nil {
 		p.logger.InfoError("cannot send welcome packet", err)
 
 		return false
@@ -213,7 +226,12 @@ func (p *Proxy) doFakeTLSHandshake(ctx *streamContext) bool {
 }
 
 func (p *Proxy) doObfuscatedHandshake(ctx *streamContext) error {
-	dc, conn, err := p.clientObfuscatror.ReadHandshake(ctx.clientConn)
+	// Use the matched secret's key for obfuscation
+	obfs := obfuscation.Obfuscator{
+		Secret: ctx.matchedSecret.Key[:],
+	}
+
+	dc, conn, err := obfs.ReadHandshake(ctx.clientConn)
 	if err != nil {
 		return fmt.Errorf("cannot process client handshake: %w", err)
 	}
@@ -326,7 +344,7 @@ func NewProxy(opts ProxyOpts) (*Proxy, error) {
 	proxy := &Proxy{
 		ctx:                      ctx,
 		ctxCancel:                cancel,
-		secret:                   opts.Secret,
+		secrets:                  opts.Secrets,
 		network:                  opts.Network,
 		antiReplayCache:          opts.AntiReplayCache,
 		blocklist:                opts.IPBlocklist,
@@ -344,7 +362,7 @@ func NewProxy(opts ProxyOpts) (*Proxy, error) {
 			opts.Network.MakeHTTPClient(nil),
 		),
 		clientObfuscatror: obfuscation.Obfuscator{
-			Secret: opts.Secret.Key[:],
+			Secret: opts.Secrets[0].Key[:],
 		},
 		domainFrontingProxyProtocol: opts.DomainFrontingProxyProtocol,
 	}

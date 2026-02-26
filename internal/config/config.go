@@ -24,7 +24,8 @@ type ListConfig struct {
 type Config struct {
 	Debug                       TypeBool        `json:"debug"`
 	AllowFallbackOnUnknownDC    TypeBool        `json:"allowFallbackOnUnknownDc"`
-	Secret                      mtglib.Secret   `json:"secret"`
+	Secret                      mtglib.Secret   `json:"secret,omitempty"`
+	Secrets                     []mtglib.Secret `json:"secrets,omitempty"`
 	BindTo                      TypeHostPort    `json:"bindTo"`
 	ProxyProtocolListener       TypeBool        `json:"proxyProtocolListener"`
 	PreferIP                    TypePreferIP    `json:"preferIp"`
@@ -98,8 +99,20 @@ func (c *Config) GetDomainFrontingProxyProtocol(defaultValue bool) bool {
 }
 
 func (c *Config) Validate() error {
-	if !c.Secret.Valid() {
-		return fmt.Errorf("invalid secret %s", c.Secret.String())
+	// Handle backwards compatibility: convert single secret to array
+	if len(c.Secrets) == 0 && c.Secret.Valid() {
+		c.Secrets = []mtglib.Secret{c.Secret}
+	}
+
+	// Validate that we have at least one valid secret
+	if len(c.Secrets) == 0 {
+		return fmt.Errorf("no secrets configured")
+	}
+
+	for i, secret := range c.Secrets {
+		if !secret.Valid() {
+			return fmt.Errorf("invalid secret at index %d: %s", i, secret.String())
+		}
 	}
 
 	if c.BindTo.Get("") == "" {

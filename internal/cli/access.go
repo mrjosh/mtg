@@ -51,49 +51,51 @@ func (a *Access) Run(cli *CLI, version string) error {
 		return fmt.Errorf("cannot init config: %w", err)
 	}
 
-	resp := &accessResponse{}
-	resp.Secret.Base64 = conf.Secret.Base64()
-	resp.Secret.Hex = conf.Secret.Hex()
-
 	ntw, err := makeNetwork(conf, version)
 	if err != nil {
 		return fmt.Errorf("cannot init network: %w", err)
 	}
 
+	// Get IPs once for all secrets
 	wg := &sync.WaitGroup{}
+	var ipv4, ipv6 net.IP
 
 	wg.Go(func() {
-		ip := a.PublicIPv4
-		if ip == nil {
-			ip = a.getIP(ntw, "tcp4")
+		ipv4 = a.PublicIPv4
+		if ipv4 == nil {
+			ipv4 = a.getIP(ntw, "tcp4")
 		}
-
-		if ip != nil {
-			ip = ip.To4()
+		if ipv4 != nil {
+			ipv4 = ipv4.To4()
 		}
-
-		resp.IPv4 = a.makeURLs(conf, ip)
 	})
 	wg.Go(func() {
-		ip := a.PublicIPv6
-		if ip == nil {
-			ip = a.getIP(ntw, "tcp6")
+		ipv6 = a.PublicIPv6
+		if ipv6 == nil {
+			ipv6 = a.getIP(ntw, "tcp6")
 		}
-
-		if ip != nil {
-			ip = ip.To16()
+		if ipv6 != nil {
+			ipv6 = ipv6.To16()
 		}
-
-		resp.IPv6 = a.makeURLs(conf, ip)
 	})
 
 	wg.Wait()
+
+	// Generate response for each secret
+	responses := make([]accessResponse, len(conf.Secrets))
+	for i, secret := range conf.Secrets {
+		resp := &responses[i]
+		resp.Secret.Base64 = secret.Base64()
+		resp.Secret.Hex = secret.Hex()
+		resp.IPv4 = a.makeURLs(conf, secret, ipv4)
+		resp.IPv6 = a.makeURLs(conf, secret, ipv6)
+	}
 
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 
-	if err := encoder.Encode(resp); err != nil {
+	if err := encoder.Encode(responses); err != nil {
 		return fmt.Errorf("cannot dump access json: %w", err)
 	}
 
@@ -134,7 +136,7 @@ func (a *Access) getIP(ntw mtglib.Network, protocol string) net.IP {
 	return net.ParseIP(strings.TrimSpace(string(data)))
 }
 
-func (a *Access) makeURLs(conf *config.Config, ip net.IP) *accessResponseURLs {
+func (a *Access) makeURLs(conf *config.Config, secret mtglib.Secret, ip net.IP) *accessResponseURLs {
 	if ip == nil {
 		return nil
 	}
@@ -149,9 +151,9 @@ func (a *Access) makeURLs(conf *config.Config, ip net.IP) *accessResponseURLs {
 	values.Set("port", strconv.Itoa(int(portNo)))
 
 	if a.Hex {
-		values.Set("secret", conf.Secret.Hex())
+		values.Set("secret", secret.Hex())
 	} else {
-		values.Set("secret", conf.Secret.Base64())
+		values.Set("secret", secret.Base64())
 	}
 
 	urlQuery := values.Encode()

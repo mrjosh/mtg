@@ -18,7 +18,23 @@ debug = true
 # A secret. Please remember that mtg supports only FakeTLS mode, legacy
 # simple and secured mode are prohibited. For you it means that secret
 # should either be base64-encoded or starts with ee.
+#
+# Single secret (backwards compatible):
 secret = "ee367a189aee18fa31c190054efd4a8e9573746f726167652e676f6f676c65617069732e636f6d"
+#
+# Multiple secrets (for secret rotation and client isolation):
+# If you want to use multiple secrets, comment out the single 'secret' line above
+# and uncomment the 'secrets' array below:
+# secrets = [
+#     "ee367a189aee18fa31c190054efd4a8e9573746f726167652e676f6f676c65617069732e636f6d",
+#     "ee428b259bff29fb42d190064fed5a9f0674657374312e6578616d706c652e636f6d",
+#     "ee539c369cef39fc53e190075fed6ba0f775657374322e6578616d706c652e636f6d"
+# ]
+#
+# Multiple secrets enable:
+#   - Secret rotation: Gradually migrate clients to new secrets without downtime
+#   - Client isolation: Different clients/groups can use different secrets
+#   - Security: Revoke individual secrets without affecting all clients
 
 # Host:port pair to run proxy on.
 bind-to = "0.0.0.0:3128"

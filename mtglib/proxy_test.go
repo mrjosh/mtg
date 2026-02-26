@@ -36,7 +36,7 @@ func (suite *ProxyTestSuite) ProxyAddress() string {
 }
 
 func (suite *ProxyTestSuite) ProxySecret() string {
-	return suite.opts.Secret.Hex()
+	return suite.opts.Secrets[0].Hex()
 }
 
 func (suite *ProxyTestSuite) SetupSuite() {
@@ -61,7 +61,7 @@ func (suite *ProxyTestSuite) SetupSuite() {
 	go allowlist.Run(time.Second)
 
 	suite.opts = &mtglib.ProxyOpts{
-		Secret:          mtglib.GenerateSecret("httpbin.org"),
+		Secrets:         []mtglib.Secret{mtglib.GenerateSecret("httpbin.org")},
 		Network:         ntw,
 		AntiReplayCache: antireplay.NewNoop(),
 		IPBlocklist:     ipblocklist.NewNoop(),
@@ -96,7 +96,7 @@ func (suite *ProxyTestSuite) TearDownSuite() {
 
 func (suite *ProxyTestSuite) TestCannotInitNoSecret() {
 	opts := *suite.opts
-	opts.Secret = mtglib.Secret{}
+	opts.Secrets = []mtglib.Secret{}
 
 	_, err := mtglib.NewProxy(opts)
 	suite.Error(err)
