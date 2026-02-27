@@ -34,8 +34,9 @@ type Proxy struct {
 	configUpdater               *dc.PublicConfigUpdater
 	clientObfuscatror           obfuscation.Obfuscator
 
-	secrets         []Secret
-	network         Network
+	secrets       []Secret
+	secretsMutex  sync.RWMutex
+	network       Network
 	antiReplayCache AntiReplayCache
 	blocklist       IPBlocklist
 	allowlist       IPBlocklist
@@ -47,7 +48,10 @@ type Proxy struct {
 // If DomainFrontingIP is set, it is used instead of resolving the hostname.
 // Uses the first secret's host for domain fronting.
 func (p *Proxy) DomainFrontingAddress() string {
+	p.secretsMutex.RLock()
 	host := p.secrets[0].Host
+	p.secretsMutex.RUnlock()
+
 	if p.domainFrontingIP != "" {
 		host = p.domainFrontingIP
 	}
@@ -161,6 +165,21 @@ func (p *Proxy) Shutdown() {
 	p.blocklist.Shutdown()
 }
 
+// ReloadSecrets atomically updates the proxy's secrets.
+// This is safe to call while the proxy is serving connections.
+func (p *Proxy) ReloadSecrets(newSecrets []Secret) {
+	if len(newSecrets) == 0 {
+		p.logger.Warning("attempted to reload with empty secrets, ignoring")
+		return
+	}
+
+	p.secretsMutex.Lock()
+	p.secrets = newSecrets
+	p.secretsMutex.Unlock()
+
+	p.logger.BindInt("count", len(newSecrets)).Info("secrets reloaded successfully")
+}
+
 func (p *Proxy) doFakeTLSHandshake(ctx *streamContext) bool {
 	rec := record.AcquireRecord()
 	defer record.ReleaseRecord(rec)
@@ -179,20 +198,41 @@ func (p *Proxy) doFakeTLSHandshake(ctx *streamContext) bool {
 	var hello faketls.ClientHello
 	var helloFound bool
 
+	// Store original payload since ParseClientHello modifies it in place
+	originalPayload := rec.Payload.Bytes()
+
+	// Lock secrets for reading during matching
+	p.secretsMutex.RLock()
 	for i := range p.secrets {
 		secret := &p.secrets[i]
-		h, err := faketls.ParseClientHello(secret.Key[:], rec.Payload.Bytes())
+
+		// Make a copy of the payload for each secret attempt
+		// ParseClientHello modifies the buffer, so we need a fresh copy each time
+		payloadCopy := make([]byte, len(originalPayload))
+		copy(payloadCopy, originalPayload)
+
+		h, err := faketls.ParseClientHello(secret.Key[:], payloadCopy)
 		if err != nil {
+			p.logger.BindInt("secret_index", i).
+				BindStr("secret_host", secret.Host).
+				InfoError("secret parse failed", err)
 			continue // Try next secret
 		}
 
-		if err := h.Valid(secret.Host, p.tolerateTimeSkewness); err == nil {
-			matchedSecret = secret
-			hello = h
-			helloFound = true
-			break // Found matching secret
+		if err := h.Valid(secret.Host, p.tolerateTimeSkewness); err != nil {
+			p.logger.BindInt("secret_index", i).
+				BindStr("secret_host", secret.Host).
+				BindStr("client_host", h.Host).
+				InfoError("secret validation failed", err)
+			continue // Try next secret
 		}
+
+		matchedSecret = secret
+		hello = h
+		helloFound = true
+		break // Found matching secret
 	}
+	p.secretsMutex.RUnlock()
 
 	if !helloFound {
 		p.logger.Info("no matching secret found for client hello")

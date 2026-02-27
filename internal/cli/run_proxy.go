@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/9seconds/mtg/v2/antireplay"
 	"github.com/9seconds/mtg/v2/events"
@@ -204,7 +206,7 @@ func makeEventStream(conf *config.Config, logger mtglib.Logger) (mtglib.EventStr
 	return events.NewNoopStream(), nil
 }
 
-func runProxy(conf *config.Config, version string) error { //nolint: funlen
+func runProxy(conf *config.Config, version string, configPath string) error { //nolint: funlen
 	logger := makeLogger(conf)
 
 	logger.BindJSON("configuration", conf.String()).Debug("configuration")
@@ -281,9 +283,34 @@ func runProxy(conf *config.Config, version string) error { //nolint: funlen
 
 	ctx := utils.RootContext()
 
+	// Set up config reload signal handler
+	reloadChan := make(chan os.Signal, 1)
+	signal.Notify(reloadChan, syscall.SIGUSR1)
+
+	go func() {
+		for range reloadChan {
+			logger.Info("received SIGUSR1, reloading configuration")
+
+			newConf, err := utils.ReadConfig(configPath)
+			if err != nil {
+				logger.WarningError("failed to reload config", err)
+				continue
+			}
+
+			if len(newConf.Secrets) == 0 {
+				logger.Warning("reloaded config has no secrets, skipping reload")
+				continue
+			}
+
+			proxy.ReloadSecrets(newConf.Secrets)
+		}
+	}()
+
 	go proxy.Serve(listener) //nolint: errcheck
 
 	<-ctx.Done()
+	signal.Stop(reloadChan)
+	close(reloadChan)
 	listener.Close() //nolint: errcheck
 	proxy.Shutdown()
 

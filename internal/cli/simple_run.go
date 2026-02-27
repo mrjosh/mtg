@@ -92,5 +92,5 @@ func (s *SimpleRun) Run(cli *CLI, version string) error { //nolint: cyclop,funle
 		return fmt.Errorf("invalid result configuration: %w", err)
 	}
 
-	return runProxy(conf, version)
+	return runProxy(conf, version, "")
 }
